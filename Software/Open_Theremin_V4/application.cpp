@@ -26,13 +26,16 @@ static int32_t volCalibrationBase = 0;
 
 Application::Application()
   : _state(PLAYING),
-    _mode(NORMAL) {};
+    _mode(NORMAL), _vt_cmd(NONE)
+{};
 
 void Application::setup()
 {
 #if SERIAL_ENABLED
   Serial.begin(Application::BAUD);
 #endif
+
+  Serial.begin(Application::BAUD); // vt
 
   HW_LED1_ON;
   HW_LED2_OFF;
@@ -195,6 +198,16 @@ mloop: // Main loop avoiding the GCC "optimization"
     registerValue = 2;
   }
 
+
+  if ( vt_registerValue != 4 ) { // vt: overwrite with ext values when ext register !=0
+    vWavetableSelector = vt_vWavetableSelector;
+    registerValue = vt_registerValue;
+  }
+
+
+
+
+
   if (_state == PLAYING && HW_BUTTON_PRESSED)
   {
 
@@ -249,6 +262,7 @@ mloop: // Main loop avoiding the GCC "optimization"
   if (timerExpired(TICKS_100_MILLIS))
   {
     resetTimer();
+
     Serial.write(pitch & 0xff); // Send char on serial (if used)
     Serial.write((pitch >> 8) & 0xff);
   }
@@ -272,10 +286,31 @@ mloop: // Main loop avoiding the GCC "optimization"
         tmpPitch = ((pitchCalibrationBase - pitch_v) + 2048 - (pitchPotValue << 2));
         tmpPitch = min(tmpPitch, 16383);  // Unaudible upper limit just to prevent DAC overflow
         tmpPitch = max(tmpPitch, 0);      // Silence behing zero beat
+
         setWavetableSampleAdvance(tmpPitch >> registerValue);
         if (tmpPitch != pitch_p)
         { // output new pitch CV value only if pitch value changed (saves runtime resources)
           pitch_p = tmpPitch;
+
+
+
+          // visual tuner block
+          uint16_t intended_freq = ((((pitchCalibrationBase - pitch_v) + 2048 - (pitchPotValue << 2)) * 1000) / 1024) >> registerValue;
+          intended_freq = intended_freq > 5000 ? 0 : intended_freq;
+
+          if ( _state == PLAYING && intended_freq != 0 && timerExpired(TICKS_100_MILLIS) )
+          {
+            resetTimer();
+            vt_loop(intended_freq);
+
+           // Serial.print("r="); Serial.print(registerValue); Serial.print(" "); Serial.println(vt_registerValue);
+            //Serial.print("v="); Serial.print(vWavetableSelector); Serial.print(" "); Serial.println(vt_vWavetableSelector);
+          } // vt
+
+
+
+
+
 #if CV_LOG
           tmpOct = 0;
           while (tmpPitch > 1023) {
@@ -581,4 +616,105 @@ void Application::delay_NOP(unsigned long time)
   {
     __asm__ __volatile__("nop");
   }
+}
+
+/* ylh's visual tuner/controller
+
+    interprets the following from the serial port
+   "$Rn" = Register control where n = 1,2,3; n=4 then use local knobs' values
+   "$Wn" = Wavetable control where n = 0 ... 7
+   "$sn" = shows info on serial whern n=0: none; n=1: pitch; n=2: debug details
+
+*/
+void Application::vt_loop(uint16_t f) {
+
+
+  if ( vt_show == 1 ) {
+    Serial.println(f);
+  } else if (vt_show == 2) {
+    Serial.print("\nplayed Hz:");
+    Serial.print(f);
+    vt_show_debug();
+  } else {}
+
+  while (Serial.available()) {
+    int val = Serial.read();
+
+    if (val == '$') {
+      _vt_cmd = COMMAND;
+      vt_value = 0;
+    }
+
+    else if ( _vt_cmd == COMMAND ) {
+      if ( val == 'R' ) {
+        _vt_cmd = REGISTER;
+      } else if ( val == 'W' ) {
+        _vt_cmd = WAVETABLE;
+      } else if (val == 's' ) {
+        _vt_cmd = SHOW;
+      }
+    }
+    else if ( val >= '0' && val <= '9') {
+      vt_value = vt_value * 10 + val - '0';
+      if ( _vt_cmd == REGISTER ) {
+        if (vt_value >= 1 && vt_value <= 4) {  // 4 = using values from knobs
+          vt_registerValue = vt_value;
+        } else {
+          Serial.print( "illegal Register value " );
+          Serial.print( vt_value );
+        }
+      }
+      else if ( _vt_cmd == WAVETABLE ) {
+        if (vt_value >= 0 && vt_value <= 7) {
+
+          vt_vWavetableSelector = vt_value;
+        } else {
+          Serial.print( "illegal Wavetable value " );
+          Serial.print( val );
+        }
+      }
+      else if ( _vt_cmd == SHOW ) {
+        if (vt_value >= 0 && vt_value <= 2) {
+          vt_show = vt_value;
+        } else {
+          Serial.print( "illegal Show value " );
+          Serial.print( vt_value );
+        }
+      }
+      else {
+        Serial.print(val);
+      }
+    }
+  }
+}
+
+void Application::vt_show_debug() {
+
+  Serial.print(" mode=");
+  if ( _mode == NORMAL )
+    Serial.print("Normal");
+  else
+    Serial.print("Mute");
+
+  Serial.print(", state=");
+  if ( _state == PLAYING )
+    Serial.print("Playing");
+  else
+    Serial.print("Calibrating");
+
+  Serial.print(" BUTTON="); Serial.print(HW_BUTTON_PRESSED);
+  Serial.print(" timer="); Serial.print(timer);
+
+  Serial.print(", pitch=");
+  Serial.print(pitch);
+  Serial.print(", vol=");
+  Serial.print(vol);
+
+  Serial.print(" v=");  Serial.print(analogRead(VOLUME_POT));
+  Serial.print(" p="); Serial.print(analogRead(PITCH_POT));
+
+  Serial.print(" r="); Serial.print(analogRead(REGISTER_SELECT_POT));
+  Serial.print(" w="); Serial.print(analogRead(WAVE_SELECT_POT));
+  Serial.print(" ["); Serial.print(vWavetableSelector); Serial.print("]");
+
 }

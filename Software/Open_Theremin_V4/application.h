@@ -8,6 +8,8 @@
 enum AppState {CALIBRATING = 0, PLAYING};
 enum AppMode  {MUTE = 0, NORMAL};
 
+enum AppCmd { NONE, COMMAND, REGISTER, WAVETABLE, SHOW };
+
 class Application {
   public:
     Application();
@@ -33,13 +35,19 @@ class Application {
     int32_t vol_p = -1;
     bool gate_p = false;
 
-    
+    int vt_show = 1; // send to serial: 0 - none; 1 - frequency; 2 - details
+    uint16_t vt_value = 0; // var to construct incoming values
+    uint8_t vt_registerValue = 4;
+    uint8_t vt_vWavetableSelector = 0;
+
+    static const int BAUD = 115200; // vt
 #if SERIAL_ENABLED    
     static const int BAUD = 115200;
 #endif
 
     AppState _state;
     AppMode  _mode;
+    AppCmd   _vt_cmd;
         
     void calibrate();
     void calibrate_pitch();
@@ -66,6 +74,9 @@ class Application {
     void playCalibratingCountdownSound();
     void playModeSettingSound();
     void delay_NOP(unsigned long time);
+
+    void vt_loop(uint16_t);
+    void vt_show_debug();
 };
 
 #endif // _APPLICATION_H
